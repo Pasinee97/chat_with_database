@@ -1,97 +1,95 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
+import io
 
-# Set up the Streamlit app layout
-st.title("🧠 My Chatbot and Data Analysis App")
-st.subheader("Conversation and Data Analysis")
+st.title("🧠 CSV Chatbot with Query Capability")
+st.subheader("Upload CSV and Ask Data Questions")
 
-# Capture Gemini API Key
-gemini_api_key = st.text_input("Gemini API Key: ", placeholder="Type your API Key here...", type="password")
+# Input API key
+gemini_api_key = st.text_input("Gemini API Key", type="password", placeholder="Enter your Gemini API Key")
 
-# Initialize the Gemini Model
+# Initialize Gemini model
 model = None
 if gemini_api_key:
     try:
-        # Configure Gemini with the provided API Key
         genai.configure(api_key=gemini_api_key)
         model = genai.GenerativeModel("gemini-2.0-flash-lite")
-        st.success("Gemini API Key successfully configured.")
+        st.success("Gemini is ready!")
     except Exception as e:
-        st.error(f"An error occurred while setting up the Gemini model: {e}")
+        st.error(f"Gemini setup failed: {e}")
 
-# Initialize session state for storing chat history and data
+# Session state
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []  # Initialize with an empty list
+    st.session_state.chat_history = []
 if "uploaded_data" not in st.session_state:
-    st.session_state.uploaded_data = None  # Placeholder for uploaded CSV data
+    st.session_state.uploaded_data = None
 
-# Display previous chat history using st.chat_message (if available)
-for role, message in st.session_state.chat_history:
-    st.chat_message(role).markdown(message)
-
-# Add a file uploader for CSV data
-st.subheader("Upload CSV for Analysis")
-uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
-if uploaded_file is not None:
+# Upload CSV
+uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+if uploaded_file:
     try:
-        # Load the uploaded CSV file
-        st.session_state.uploaded_data = pd.read_csv(uploaded_file)
-        st.success("File successfully uploaded and read.")
-             # Display the content of the CSV
-        st.write("### Uploaded Data Preview")
-        st.dataframe(st.session_state.uploaded_data.head())
+        df = pd.read_csv(uploaded_file)
+        st.session_state.uploaded_data = df
+        st.dataframe(df.head())
     except Exception as e:
-        st.error(f"An error occurred while reading the file: {e}")
+        st.error(f"Error reading file: {e}")
 
-# Checkbox for indicating data analysis need
-analyze_data_checkbox = st.checkbox("Analyze CSV Data with AI")
+# Chat UI
+if model and st.session_state.uploaded_data is not None:
+    question = st.chat_input("Ask a question about your data...")
+    if question:
+        st.chat_message("user").markdown(question)
+        st.session_state.chat_history.append(("user", question))
 
-# Capture user input and generate bot response
-if user_input := st.chat_input("Type your message here..."):
-    # Store and display user message
-    st.session_state.chat_history.append(("user", user_input))
-    st.chat_message("user").markdown(user_input)
+        df = st.session_state.uploaded_data.copy()
+        df_name = "df"
+        data_dict_text = str(dict(df.dtypes))
+        example_record = df.head(2).to_string(index=False)
 
-    # Determine if user input is a request for data analysis and the checkbox is selected
-    if model:
+        prompt = f"""
+You are a helpful Python code generator.
+Your goal is to write Python code snippets based on the user's question and the provided DataFrame information.
+
+**User Question:**
+{question}
+
+**DataFrame Name:**
+{df_name}
+
+**DataFrame Details:**
+{data_dict_text}
+
+**Sample Data (Top 2 Rows):**
+{example_record}
+
+**Instructions:**
+1. Write Python code that addresses the user's question by querying or manipulating the DataFrame.
+2. Use the `exec()` function to execute the generated code.
+3. Do not import pandas.
+4. Convert any date columns using pd.to_datetime().
+5. Store the result in a variable called `ANSWER`.
+6. Assume the DataFrame is already loaded as `{df_name}`.
+"""
+
         try:
-            if st.session_state.uploaded_data is not None and analyze_data_checkbox:
-                # Check if user requested data analysis or insights
-                if "analyze" in user_input.lower() or "insight" in user_input.lower():
-                    # Create a description of the data for the AI model
-                    data_description = st.session_state.uploaded_data.describe().to_string()
-                    prompt = f"Analyze the following dataset and provide insights:\n\n{data_description}"
+            # Get code from Gemini
+            response = model.generate_content(prompt)
+            generated_code = response.text
 
-                    # Generate AI response for the data analysis
-                    response = model.generate_content(prompt)
-                    bot_response = response.text
+            # Show generated code (optional for debugging)
+            with st.expander("Show generated code"):
+                st.code(generated_code, language="python")
 
-                    # Store and display the AI-generated analysis
-                    st.session_state.chat_history.append(("assistant", bot_response))
-                    st.chat_message("assistant").markdown(bot_response)
-                else:
-                    # Normal conversation with the bot
-                    response = model.generate_content(user_input)
-                    bot_response = response.text
+            # Execute generated code
+            local_vars = {"df": df, "pd": pd}
+            exec(generated_code, {}, local_vars)
 
-                    # Store and display the bot response
-                    st.session_state.chat_history.append(("assistant", bot_response))
-                    st.chat_message("assistant").markdown(bot_response)
-                st.session_state.chat_history.append(("assistant", bot_response))
-                st.chat_message("assistant").markdown(bot_response)
-            elif not analyze_data_checkbox:
-                # Respond that analysis is not enabled if the checkbox is not selected
-                bot_response = "Data analysis is disabled. Please select the 'Analyze CSV Data with AI' checkbox to enable analysis."
-                st.session_state.chat_history.append(("assistant", bot_response))
-                st.chat_message("assistant").markdown(bot_response)
-            else:
-                # Respond with a message to upload a CSV file if not yet done
-                bot_response = "Please upload a CSV file first, then ask me to analyze it."
-                st.session_state.chat_history.append(("assistant", bot_response))
-                st.chat_message("assistant").markdown(bot_response)
+            # Show the answer
+            ANSWER = local_vars.get("ANSWER", "No result returned.")
+            st.chat_message("assistant").markdown(f"**Answer:**\n\n{ANSWER}")
+            st.session_state.chat_history.append(("assistant", str(ANSWER)))
         except Exception as e:
-            st.error(f"An error occurred while generating the response: {e}")
-    else:
-        st.warning("Please configure the Gemini API Key to enable chat responses.")
-
+            st.error(f"An error occurred: {e}")
+else:
+    st.info("Please upload a CSV and enter your API key to get started.")
