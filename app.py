@@ -50,4 +50,52 @@ if model and st.session_state.uploaded_data is not None:
         prompt = f"""
 You are a helpful Python code generator.
 
-Your goal is to write Python code snippets based on the user's question and
+Your goal is to write Python code snippets based on the user's question and the provided DataFrame.
+
+**User Question:**
+{user_input}
+
+**DataFrame Name:**
+{df_name}
+
+**DataFrame Details:**
+{data_dict_text}
+
+**Sample Data (Top 2 Rows):**
+{example_record}
+
+**Instructions:**
+1. Write Python code that answers the user's question by querying or manipulating the DataFrame.
+2. Use the exec() function to execute the code.
+3. Do NOT import pandas.
+4. Convert date columns using pd.to_datetime().
+5. Store the result in a variable named ANSWER.
+6. Assume the DataFrame is already loaded as {df_name}.
+"""
+
+        try:
+            # Get code from Gemini
+            response = model.generate_content(prompt)
+            generated_code = response.text
+
+            # Strip markdown formatting if present
+            clean_code = generated_code.strip()
+            if clean_code.startswith("```"):
+                clean_code = clean_code.strip("` \npython").strip("` \n")
+
+            # Show generated code
+            with st.expander("Show generated code"):
+                st.code(clean_code, language="python")
+
+            # Execute the generated code
+            local_vars = {"df": df, "pd": pd}
+            exec(clean_code, {}, local_vars)
+
+            # Display result from ANSWER
+            ANSWER = local_vars.get("ANSWER", "No result returned.")
+            st.chat_message("assistant").markdown(f"**Answer:**\n\n{ANSWER}")
+            st.session_state.chat_history.append(("assistant", str(ANSWER)))
+        except Exception as e:
+            st.error(f"❌ Error while generating or executing code: {e}")
+else:
+    st.info("📌 Please upload a CSV file and enter your Gemini API key.")
