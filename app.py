@@ -5,7 +5,7 @@ import google.generativeai as genai
 
 # --- Layout ---
 st.title("🧠 CSV Chatbot with Schema Awareness")
-st.subheader("Upload your data and ask questions like a boss!")
+st.subheader("Upload your data and ask questions naturally!")
 
 # --- API Key ---
 gemini_api_key = st.text_input("🔑 Gemini API Key", type="password", placeholder="Paste your Gemini API Key here")
@@ -61,81 +61,97 @@ if model and st.session_state.transaction_data is not None and st.session_state.
 
     if user_input:
         st.chat_message("user").markdown(user_input)
-        st.session_state.chat_history.append(("user", user_input))
-
         df = st.session_state.transaction_data.copy()
         df_name = "df"
         data_dict_text = st.session_state.data_dictionary.to_string(index=False)
         example_record = df.head(2).to_string(index=False)
 
-        # --- Gemini Prompt with Schema Awareness ---
-        prompt = f"""
+        # --- Prompt to generate code ---
+        code_prompt = f"""
 You are a helpful Python code generator.
 
-Your goal is to write Python code snippets based on the user's question and the provided DataFrame.
+Your job is to write Python code that answers the user's question using the DataFrame.
 
 **User Question:**
 {user_input}
 
-**DataFrame Name:**
-{df_name}
+**DataFrame Name:** {df_name}
 
 **Data Dictionary (Column Descriptions):**
 {data_dict_text}
 
-**Sample Data (Top 2 Rows):**
+**Example Data (Top 2 Rows):**
 {example_record}
 
 **Instructions:**
-1. Write Python code that answers the user's question using the DataFrame.
+1. Use Python code to answer the question.
 2. Use pd.to_datetime() for dates if needed.
-3. Do NOT include any import statements.
-4. Use exec() to execute the code.
-5. Store the result in a variable called ANSWER.
-6. Assume the DataFrame is already loaded as `{df_name}`.
+3. Do NOT use import statements.
+4. Store the final answer in a variable named ANSWER.
+5. Assume the DataFrame is already loaded as `{df_name}`.
 """
 
         try:
-            # Generate code from Gemini
-            response = model.generate_content(prompt)
+            # Get generated code
+            response = model.generate_content(code_prompt)
             generated_code = response.text
 
-            # Clean up markdown/code fences
+            # Clean code
             clean_code = generated_code.strip()
             if clean_code.startswith("```"):
                 clean_code = clean_code.strip("` \npython").strip("` \n")
-
-            # Remove import lines
             clean_code = "\n".join(
                 line for line in clean_code.splitlines()
                 if not line.strip().lower().startswith("import")
                 and not line.strip().lower().startswith("from ")
             ).strip()
 
-            # Show code
+            # Show raw code
             with st.expander("📜 Show generated code"):
                 st.code(clean_code, language="python")
 
-            # Local vars for safe execution
-            local_vars = {
-                "df": df,
-                "pd": pd,
-                "datetime": datetime,
-            }
-
-            # Execute code
+            # Safe exec environment
+            local_vars = {"df": df, "pd": pd, "datetime": datetime}
             exec(clean_code, {}, local_vars)
             ANSWER = local_vars.get("ANSWER", "No result returned.")
 
-            # Display answer
-            if isinstance(ANSWER, (pd.DataFrame, pd.Series, dict, list)):
-                st.chat_message("assistant").write(ANSWER)
-            else:
-                st.chat_message("assistant").markdown(f"**Answer:**\n\n{ANSWER}")
+            # Step 2: Humanize the response
+            explanation_prompt = f"""
+You are a data assistant. Here's a user question and the raw Python result.
+Generate a friendly explanation that clearly communicates the result in plain English.
 
-            st.session_state.chat_history.append(("assistant", str(ANSWER)))
+**User Question:**  
+{user_input}
+
+**Raw Python Result:**  
+{ANSWER}
+
+**Friendly Answer:**  
+"""
+            human_response = model.generate_content(explanation_prompt)
+            explanation = human_response.text.strip()
+
+            # Show final answer
+            st.chat_message("assistant").markdown(f"**Explanation:**\n\n{explanation}")
+            st.session_state.chat_history.append({
+                "question": user_input,
+                "code": clean_code,
+                "raw_answer": ANSWER,
+                "explanation": explanation
+            })
 
         except Exception as e:
             st.error(f"❌ Error while generating or executing code: {e}")
 else:
-    st.info("📌 Please upload both the transaction CSV and data dictionary to begin.")
+    st.info("📌 Upload both the transaction file and data dictionary to get started.")
+
+# --- Show Q&A History ---
+if st.session_state.chat_history:
+    st.markdown("## 🕓 Chat History")
+    for entry in st.session_state.chat_history[::-1]:  # newest first
+        st.markdown(f"**🧑‍💻 Question:** {entry['question']}")
+        st.markdown(f"**🤖 Explanation:** {entry['explanation']}")
+        with st.expander("🔍 Raw Result & Code"):
+            st.write("**Raw Result:**")
+            st.write(entry["raw_answer"])
+            st.code(entry["code"], language="python")
