@@ -16,15 +16,15 @@ if gemini_api_key:
         model = genai.GenerativeModel("gemini-2.0-flash-lite")
         st.success("✅ Gemini model initialized.")
     except Exception as e:
-        st.error(f"Failed to initialize Gemini: {e}")
+        st.error(f"❌ Failed to initialize Gemini: {e}")
 
-# Set up session state
+# Session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "uploaded_data" not in st.session_state:
     st.session_state.uploaded_data = None
 
-# Upload CSV
+# File upload
 uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
 if uploaded_file:
     try:
@@ -46,7 +46,7 @@ if model and st.session_state.uploaded_data is not None:
         data_dict_text = str(dict(df.dtypes))
         example_record = df.head(2).to_string(index=False)
 
-        # Prompt template
+        # Prompt for Gemini to generate Python code
         prompt = f"""
 You are a helpful Python code generator.
 
@@ -74,27 +74,40 @@ Your goal is to write Python code snippets based on the user's question and the 
 """
 
         try:
-            # Get code from Gemini
+            # Get response from Gemini
             response = model.generate_content(prompt)
             generated_code = response.text
 
-            # Strip markdown formatting if present
+            # Clean the code
             clean_code = generated_code.strip()
             if clean_code.startswith("```"):
                 clean_code = clean_code.strip("` \npython").strip("` \n")
+
+            # Remove 'import' lines
+            clean_code = "\n".join(
+                line for line in clean_code.splitlines()
+                if not line.strip().lower().startswith("import")
+            ).strip()
 
             # Show generated code
             with st.expander("Show generated code"):
                 st.code(clean_code, language="python")
 
-            # Execute the generated code
+            # Execute code
             local_vars = {"df": df, "pd": pd}
             exec(clean_code, {}, local_vars)
 
-            # Display result from ANSWER
+            # Retrieve result
             ANSWER = local_vars.get("ANSWER", "No result returned.")
-            st.chat_message("assistant").markdown(f"**Answer:**\n\n{ANSWER}")
+
+            # Display result nicely
+            if isinstance(ANSWER, (pd.DataFrame, pd.Series)):
+                st.chat_message("assistant").dataframe(ANSWER)
+            else:
+                st.chat_message("assistant").markdown(f"**Answer:**\n\n{ANSWER}")
+
             st.session_state.chat_history.append(("assistant", str(ANSWER)))
+
         except Exception as e:
             st.error(f"❌ Error while generating or executing code: {e}")
 else:
