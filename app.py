@@ -3,14 +3,13 @@ import pandas as pd
 import datetime
 import google.generativeai as genai
 
-# App layout
-st.title("🧠 CSV Chatbot with Query Capability")
-st.subheader("Upload your CSV and ask questions!")
+# --- Layout ---
+st.title("🧠 CSV Chatbot with Schema Awareness")
+st.subheader("Upload your data and ask questions like a boss!")
 
-# API Key
+# --- API Key ---
 gemini_api_key = st.text_input("🔑 Gemini API Key", type="password", placeholder="Paste your Gemini API Key here")
 
-# Init Gemini
 model = None
 if gemini_api_key:
     try:
@@ -20,59 +19,80 @@ if gemini_api_key:
     except Exception as e:
         st.error(f"❌ Failed to initialize Gemini: {e}")
 
-# Session state
+# --- Session State ---
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "uploaded_data" not in st.session_state:
-    st.session_state.uploaded_data = None
+if "transaction_data" not in st.session_state:
+    st.session_state.transaction_data = None
+if "data_dictionary" not in st.session_state:
+    st.session_state.data_dictionary = None
 
-# File upload
-uploaded_file = st.file_uploader("📄 Upload a CSV file", type=["csv"])
-if uploaded_file:
+# --- Upload Files ---
+st.subheader("📁 Upload Your Files")
+
+col1, col2 = st.columns(2)
+with col1:
+    transaction_file = st.file_uploader("Transaction CSV", type=["csv"], key="transactions")
+with col2:
+    dict_file = st.file_uploader("Data Dictionary CSV", type=["csv"], key="data_dict")
+
+# --- Load Files ---
+if transaction_file:
     try:
-        df = pd.read_csv(uploaded_file)
-        st.session_state.uploaded_data = df
-        st.write("### Preview of your data:")
+        df = pd.read_csv(transaction_file)
+        st.session_state.transaction_data = df
+        st.write("✅ Transaction Data Preview")
         st.dataframe(df.head())
     except Exception as e:
-        st.error(f"❌ Failed to read CSV: {e}")
+        st.error(f"❌ Could not load transaction file: {e}")
 
-# Chat
-if model and st.session_state.uploaded_data is not None:
+if dict_file:
+    try:
+        data_dict_df = pd.read_csv(dict_file)
+        st.session_state.data_dictionary = data_dict_df
+        st.write("✅ Data Dictionary Preview")
+        st.dataframe(data_dict_df)
+    except Exception as e:
+        st.error(f"❌ Could not load data dictionary file: {e}")
+
+# --- Chatbot Section ---
+if model and st.session_state.transaction_data is not None and st.session_state.data_dictionary is not None:
     user_input = st.chat_input("Ask a question about your data...")
+
     if user_input:
         st.chat_message("user").markdown(user_input)
         st.session_state.chat_history.append(("user", user_input))
 
-        df = st.session_state.uploaded_data.copy()
+        df = st.session_state.transaction_data.copy()
         df_name = "df"
-        data_dict_text = str(dict(df.dtypes))
+        data_dict_text = st.session_state.data_dictionary.to_string(index=False)
         example_record = df.head(2).to_string(index=False)
 
-        # Gemini prompt
+        # --- Gemini Prompt with Schema Awareness ---
         prompt = f"""
 You are a helpful Python code generator.
 
-Your job is to generate Python code that answers the user's question using the DataFrame provided.
+Your goal is to write Python code snippets based on the user's question and the provided DataFrame.
 
 **User Question:**
 {user_input}
 
-**DataFrame Name:** {df_name}
+**DataFrame Name:**
+{df_name}
 
-**DataFrame Structure:**
+**Data Dictionary (Column Descriptions):**
 {data_dict_text}
 
-**Example Data (top 2 rows):**
+**Sample Data (Top 2 Rows):**
 {example_record}
 
 **Instructions:**
-1. Use Python code to answer the question.
-2. Use `exec()` to execute the code.
-3. Do NOT use `import` or `from ... import`.
-4. Convert date columns with `pd.to_datetime()` if needed.
-5. Store the final answer in a variable named `ANSWER`.
-6. The DataFrame is already loaded as `{df_name}`.
+1. Write Python code that answers the user's question using the DataFrame.
+2. Use pd.to_datetime() for dates if needed.
+3. Do NOT include any import statements.
+4. Use exec() to execute the code.
+5. Store the result in a variable called ANSWER.
+6. Assume the DataFrame is already loaded as `{df_name}`.
 """
 
         try:
@@ -80,35 +100,34 @@ Your job is to generate Python code that answers the user's question using the D
             response = model.generate_content(prompt)
             generated_code = response.text
 
-            # Clean up code
+            # Clean up markdown/code fences
             clean_code = generated_code.strip()
             if clean_code.startswith("```"):
                 clean_code = clean_code.strip("` \npython").strip("` \n")
 
-            # Remove all import statements
+            # Remove import lines
             clean_code = "\n".join(
                 line for line in clean_code.splitlines()
                 if not line.strip().lower().startswith("import")
                 and not line.strip().lower().startswith("from ")
             ).strip()
 
-            # Show code for transparency
+            # Show code
             with st.expander("📜 Show generated code"):
                 st.code(clean_code, language="python")
 
-            # Safe local execution environment
+            # Local vars for safe execution
             local_vars = {
                 "df": df,
                 "pd": pd,
                 "datetime": datetime,
             }
 
+            # Execute code
             exec(clean_code, {}, local_vars)
-
-            # Get the answer
             ANSWER = local_vars.get("ANSWER", "No result returned.")
 
-            # Display the result
+            # Display answer
             if isinstance(ANSWER, (pd.DataFrame, pd.Series, dict, list)):
                 st.chat_message("assistant").write(ANSWER)
             else:
@@ -117,6 +136,6 @@ Your job is to generate Python code that answers the user's question using the D
             st.session_state.chat_history.append(("assistant", str(ANSWER)))
 
         except Exception as e:
-            st.error(f"❌ Error during execution: {e}")
+            st.error(f"❌ Error while generating or executing code: {e}")
 else:
-    st.info("📌 Upload a CSV file and provide your Gemini API key to begin.")
+    st.info("📌 Please upload both the transaction CSV and data dictionary to begin.")
