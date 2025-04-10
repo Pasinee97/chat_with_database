@@ -4,8 +4,8 @@ import pandas as pd
 import datetime
 import google.generativeai as genai
 
-st.set_page_config(page_title="Chatbot with Database", layout="centered")
-st.title("📁 Chatbot with Database")
+st.set_page_config(page_title="CSV Chatbot - Human Summary Only", layout="centered")
+st.title("🧠 CSV Chatbot with Schema Support")
 
 # --- Initialize Gemini Model ---
 try:
@@ -111,16 +111,21 @@ You are a helpful Python code generator.
             exec(cleaned_code, {}, local_vars)
             answer = local_vars.get("ANSWER", "No result returned.")
 
-            # Prompt Gemini to explain result
+            # Prompt Gemini to explain result in human language (no code discussion)
             explain_prompt = f"""
 You are a helpful assistant.
 
 The user asked: "{user_input}"
 
-The Python result is: {answer}
+Here is the final result after analyzing the data: {answer}
 
-Please explain the result in clear and friendly language.
+Please explain this result in simple, friendly, and **non-technical** language. 
+Focus only on what the **numbers or values mean**, and **do not describe the code** or how the result was computed.
+
+Avoid any phrases like "Python code", "dictionary", or "format". 
+Instead, answer as if you're speaking to someone with no programming knowledge.
 """
+
             explanation_response = model.generate_content(explain_prompt)
             explanation = explanation_response.text.strip()
 
