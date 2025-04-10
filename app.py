@@ -4,9 +4,10 @@ import pandas as pd
 import datetime
 import google.generativeai as genai
 
-st.title("🧠 CSV Chatbot with Schema Support")
+st.set_page_config(page_title="Chatbot with Database", layout="centered")
+st.title("📁 Chatbot with Database")
 
-# --- Load Gemini API Key from secrets ---
+# --- Initialize Gemini Model ---
 try:
     genai.configure(api_key=st.secrets["gemini_api_key"])
     model = genai.GenerativeModel("gemini-2.0-flash-lite")
@@ -17,7 +18,11 @@ except Exception as e:
     st.error(f"❌ Failed to initialize Gemini: {e}")
     model = None
 
-# --- File Uploads ---
+# --- Initialize session history ---
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []  # stores list of (user_input, explanation)
+
+# --- Upload CSV and Dictionary ---
 col1, col2 = st.columns(2)
 with col1:
     uploaded_file = st.file_uploader("📁 Upload CSV File (Transaction Data)", type=["csv"])
@@ -42,13 +47,12 @@ if dict_file:
     except Exception as e:
         st.error(f"❌ Error loading data dictionary: {e}")
 
-# --- Display chat history ---
-if model and "chat" in st.session_state:
-    for message in st.session_state.chat.history:
-        with st.chat_message("assistant" if message.role == "model" else "user"):
-            st.markdown(message.parts[0].text)
+# --- Display full Q&A history ---
+for user_text, assistant_text in st.session_state.chat_history:
+    st.chat_message("user").markdown(user_text)
+    st.chat_message("assistant").markdown(assistant_text)
 
-# --- Chat input handling ---
+# --- Chat interaction ---
 if model and "chat" in st.session_state and "df" in st.session_state:
     if user_input := st.chat_input("Ask a question about your data..."):
         st.chat_message("user").markdown(user_input)
@@ -59,7 +63,7 @@ if model and "chat" in st.session_state and "df" in st.session_state:
         sample_rows = df.head(2).to_string(index=False)
         dictionary_text = st.session_state.data_dict_df.to_string(index=False) if "data_dict_df" in st.session_state else "N/A"
 
-        # --- Prompt to generate code ---
+        # Prompt Gemini to generate Python code
         code_prompt = f"""
 You are a helpful Python code generator.
 
@@ -90,11 +94,9 @@ You are a helpful Python code generator.
             code_response = st.session_state.chat.send_message(code_prompt)
             raw_code = code_response.text.strip()
 
-            # Clean up markdown fences
+            # Cleanup
             if raw_code.startswith("```"):
-                raw_code = raw_code.strip("` \npython").strip("` \n")
-
-            # Remove import lines
+                raw_code = raw_code.strip("`\npython").strip("`\n")
             cleaned_code = "\n".join(
                 line for line in raw_code.splitlines()
                 if not line.strip().lower().startswith("import")
@@ -104,12 +106,12 @@ You are a helpful Python code generator.
             with st.expander("🧠 Generated Python Code"):
                 st.code(cleaned_code, language="python")
 
-            # Execute code
+            # Execute
             local_vars = {"df": df, "pd": pd, "datetime": datetime}
             exec(cleaned_code, {}, local_vars)
             answer = local_vars.get("ANSWER", "No result returned.")
 
-            # --- Prompt for explanation ---
+            # Prompt Gemini to explain result
             explain_prompt = f"""
 You are a helpful assistant.
 
@@ -119,11 +121,12 @@ The Python result is: {answer}
 
 Please explain the result in clear and friendly language.
 """
-
             explanation_response = model.generate_content(explain_prompt)
             explanation = explanation_response.text.strip()
 
+            # Show + Save
             st.chat_message("assistant").markdown(explanation)
+            st.session_state.chat_history.append((user_input, explanation))
 
         except Exception as e:
             st.error(f"❌ Error processing request: {e}")
